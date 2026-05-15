@@ -1,12 +1,21 @@
 import cv2, time, pandas
 from datetime import datetime
 
+# Performance optimization: Define constants for tunable parameters
+BLUR_KERNEL_SIZE = (11, 11)  # Reduced from (21, 21) for faster processing
+THRESHOLD_VALUE = 30
+MIN_CONTOUR_AREA = 10000
+FRAME_WIDTH = 640  # Resize frames for faster processing
+FRAME_HEIGHT = 480
+
 first_frame = None
 status_list = [None, None]
 times = []
 df = pandas.DataFrame(columns=["Start", "End"])
 
 video = cv2.VideoCapture(0)
+video.set(cv2.CAP_PROP_FRAME_WIDTH, FRAME_WIDTH)
+video.set(cv2.CAP_PROP_FRAME_HEIGHT, FRAME_HEIGHT)
 
 while True:
     check, frame = video.read()
@@ -15,38 +24,41 @@ while True:
 
     status = 0
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-    gray = cv2.GaussianBlur(gray, (21, 21), 0)
+    gray = cv2.GaussianBlur(gray, BLUR_KERNEL_SIZE, 0)
 
     if first_frame is None:
         first_frame = gray
         continue
 
     delta_frame = cv2.absdiff(first_frame, gray)
-    thresh_frame = cv2.threshold(delta_frame, 30, 255, cv2.THRESH_BINARY)[1]
+    thresh_frame = cv2.threshold(delta_frame, THRESHOLD_VALUE, 255, cv2.THRESH_BINARY)[1]
     thresh_frame = cv2.dilate(thresh_frame, None, iterations=2)
 
-    (cnts, _) = cv2.findContours(thresh_frame.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    # Performance optimization: Remove unnecessary copy() - findContours doesn't modify input in OpenCV 4+
+    # Note: OpenCV 4.x is required. For OpenCV 3.x, use thresh_frame.copy()
+    (cnts, _) = cv2.findContours(thresh_frame, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
     for contour in cnts:
-        if cv2.contourArea(contour) < 10000:
+        if cv2.contourArea(contour) < MIN_CONTOUR_AREA:
             continue
         status = 1
 
         (x, y, w, h) = cv2.boundingRect(contour)
         cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 255, 0), 3)
 
-    status_list.append(status)
-    status_list = status_list[-2:]
+    # Performance optimization: Direct assignment instead of append + slice
+    # Maintains a rolling window of the last 2 status values
+    status_list[0] = status_list[1]
+    status_list[1] = status
 
     if status_list[-1] == 1 and status_list[-2] == 0:
         times.append(datetime.now())
     if status_list[-1] == 0 and status_list[-2] == 1:
         times.append(datetime.now())
 
-    cv2.imshow("Gray Frame", gray)
-    cv2.imshow("Delta Frame", delta_frame)
+    # Performance optimization: Show only essential frames (reduced from 4 to 2 windows)
     cv2.imshow("Threshold Frame", thresh_frame)
-    cv2.imshow("Color Frame", frame)
+    cv2.imshow("Motion Detection", frame)
 
     key = cv2.waitKey(1)
 
